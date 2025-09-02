@@ -7,27 +7,25 @@ from Components.Label import Label
 from Components.Pixmap import Pixmap
 from Components.Sources.List import List
 from Components.config import ConfigInteger, ConfigSelection, getConfigListEntry
-from enigma import eTimer
+from enigma import eTimer, eServiceCenter, eServiceReference, iServiceInformation
 import xml.etree.ElementTree as ET
 import xml.dom.minidom as minidom
 import os
 from datetime import datetime
 
-PLUGIN_VERSION = "1.0"
+PLUGIN_VERSION = "1.1"
 PLUGIN_ICON = "icon.png"
 PLUGIN_NAME = "CiefpSatellitesXmlEditor"
 PLUGIN_DESCRIPTION = "Edit satellites.xml file"
-# Putanja do satellites.xml
 SATELLITES_XML_PATH = "/etc/tuxbox/satellites.xml"
+SATELLITES_XML_PATH_ENIGMA2 = "/etc/enigma2/satellites.xml"
 
-# Dekodiranje vrednosti prema tabeli
 POLARIZATION = {"0": "Horizontal", "1": "Vertical", "2": "Left", "3": "Right"}
 FEC_INNER = {"0": "Auto", "1": "1/2", "2": "2/3", "3": "3/4", "4": "5/6", "5": "7/8", "6": "8/9", "7": "3/5", "8": "4/5", "9": "9/10"}
 SYSTEM = {"0": "DVB-S", "1": "DVB-S2", "2": "None"}
 MODULATION = {"0": "Auto", "1": "QPSK", "2": "8PSK", "3": "QAM16", "4": "16APSK", "5": "32APSK", "6": "None"}
 PLS_MODE = {"0": "Root", "1": "Gold", "2": "Auto", "3": "Unknown"}
 
-# Prvi ekran: Satellites.xml Reader
 class CiefpSatelliteXmlReader(Screen):
     skin = """
     <screen name="CiefpSatelliteXmlReader" position="center,center" size="1800,800" title="..:: Ciefp Satellites.xml Reader ::..">
@@ -35,7 +33,6 @@ class CiefpSatelliteXmlReader(Screen):
             <convert type="StringList" />
         </widget>
         <widget name="background" pixmap="/usr/lib/enigma2/python/Plugins/Extensions/CiefpSatelliteXmlEditor/background.png" position="1400,0" size="400,800" zPosition="-1" />
-        <!-- Dugmići -->
         <ePixmap pixmap="/usr/share/enigma2/skin_default/buttons/red.png" position="100,750" size="40,40" alphatest="blend" />
         <ePixmap pixmap="/usr/share/enigma2/skin_default/buttons/green.png" position="350,750" size="40,40" alphatest="blend" />
         <ePixmap pixmap="/usr/share/enigma2/skin_default/buttons/yellow.png" position="600,750" size="40,40" alphatest="blend" />
@@ -65,14 +62,90 @@ class CiefpSatelliteXmlReader(Screen):
             "blue": self.addLine
         }, -1)
         self.tree = None
+        self.focusTimer = eTimer()
+        self.focusTimer.callback.append(self.setFocusToCurrent)
         self.loadXml()
 
     def loadXml(self):
         try:
             self.tree = ET.parse(SATELLITES_XML_PATH)
             self.updateList()
+            self.focusTimer.start(100, True)
         except Exception as e:
+            print(f"[CiefpSatelliteXmlReader] Error loading satellites.xml: {str(e)}")
             self.session.open(MessageBox, f"Error loading satellites.xml: {str(e)}", MessageBox.TYPE_ERROR)
+
+    def convertOrbitalPos(self, pos):
+        pos = int(pos)
+        return pos // 10 if pos > 999 else pos
+
+    def getCurrentTransponderData(self):
+        service = self.session.nav.getCurrentService()
+        if not service:
+            print("[CiefpSatelliteXmlReader] No active service found")
+            return None
+        frontendInfo = service.frontendInfo()
+        if not frontendInfo:
+            print("[CiefpSatelliteXmlReader] No frontend info available")
+            return None
+        frontendData = frontendInfo.getAll(True)
+        if not frontendData or frontendData.get("tuner_type", "") != "DVB-S":
+            print(f"[CiefpSatelliteXmlReader] Invalid tuner type: {frontendData.get('tuner_type', 'Unknown')}")
+            return None
+        
+        data = {
+            "orbital_position": self.convertOrbitalPos(frontendData.get("orbital_position", 0)),
+            "frequency": frontendData.get("frequency", 0) // 1000,
+            "symbol_rate": frontendData.get("symbol_rate", 0) // 1000,
+            "polarization": int(frontendData.get("polarization", 0)),
+            "fec_inner": int(frontendData.get("fec_inner", 0)),
+            "system": int(frontendData.get("system", 0)),
+            "modulation": int(frontendData.get("modulation", 0)),
+        }
+        print(f"[CiefpSatelliteXmlReader] Current transponder data: {data}")
+        return data
+
+    def setFocusToCurrent(self):
+        current_data = self.getCurrentTransponderData()
+        if not current_data:
+            print("[CiefpSatelliteXmlReader] No current transponder data, keeping focus on first row")
+            return
+        
+        found_index = -1
+        current_sat = None
+        for idx, (text, elem) in enumerate(self.list):
+            if elem.tag == "sat":
+                sat_pos = int(elem.get("position", "0"))
+                print(f"[CiefpSatelliteXmlReader] Checking satellite: {elem.get('name')} (position={sat_pos})")
+                if sat_pos == current_data["orbital_position"]:
+                    current_sat = elem
+                    found_index = idx
+                    print(f"[CiefpSatelliteXmlReader] Satellite match found at index {idx}: {text}")
+            elif elem.tag == "transponder" and current_sat:
+                trans_freq = int(elem.get("frequency", "0")) // 1000
+                trans_sr = int(elem.get("symbol_rate", "0")) // 1000
+                trans_pol = int(elem.get("polarization", "0"))
+                trans_fec = int(elem.get("fec_inner", "0"))
+                trans_sys = int(elem.get("system", "0"))
+                trans_mod = int(elem.get("modulation", "0"))
+                print(f"[CiefpSatelliteXmlReader] Checking transponder: {trans_freq} MHz, {trans_sr} kS/s, pol={trans_pol}, fec={trans_fec}, sys={trans_sys}, mod={trans_mod}")
+                
+                if (trans_freq == current_data["frequency"] and
+                    trans_sr == current_data["symbol_rate"] and
+                    trans_pol == current_data["polarization"] and
+                    trans_fec == current_data["fec_inner"] and
+                    trans_sys == current_data["system"] and
+                    trans_mod == current_data["modulation"]):
+                    found_index = idx
+                    print(f"[CiefpSatelliteXmlReader] Transponder match found at index {idx}: {text}")
+                    break
+        
+        if found_index != -1 and found_index < len(self.list):
+            print(f"[CiefpSatelliteXmlReader] Setting focus to index {found_index}")
+            self["list"].setList(self.list)
+            self["list"].setIndex(found_index)
+        else:
+            print("[CiefpSatelliteXmlReader] No match found or invalid index, keeping focus on first row")
 
     def updateList(self):
         self.list = []
@@ -89,7 +162,6 @@ class CiefpSatelliteXmlReader(Screen):
                 sys = SYSTEM.get(trans.get("system", "0"), "Unknown")
                 mod = MODULATION.get(trans.get("modulation", "0"), "Unknown")
                 
-                # Provera za multistream i T2-MI
                 extra = []
                 is_id = trans.get("is_id")
                 pls_mode = trans.get("pls_mode")
@@ -108,6 +180,7 @@ class CiefpSatelliteXmlReader(Screen):
                 
                 self.list.append((display_text, trans))
         self["list"].setList(self.list)
+        print(f"[CiefpSatelliteXmlReader] List populated with {len(self.list)} items")
 
     def okPressed(self):
         self.editLine()
@@ -117,10 +190,8 @@ class CiefpSatelliteXmlReader(Screen):
         if cur and isinstance(cur[1], ET.Element):
             root = self.tree.getroot()
             if cur[1].tag == "sat":
-                # Ako je satelit, brišemo ga direktno iz root-a
                 root.remove(cur[1])
             elif cur[1].tag == "transponder":
-                # Ako je transponder, pronalazimo njegov satelit
                 for sat in root.findall("sat"):
                     for trans in sat.findall("transponder"):
                         if trans == cur[1]:
@@ -133,12 +204,10 @@ class CiefpSatelliteXmlReader(Screen):
 
     def saveChanges(self):
         try:
-            # Generišemo XML string
             rough_string = ET.tostring(self.tree.getroot(), encoding='iso-8859-1')
             parsed = minidom.parseString(rough_string)
             pretty_xml = parsed.toprettyxml(indent="\t", encoding='iso-8859-1').decode('iso-8859-1')
             
-            # Uklanjamo višak praznih redova
             lines = pretty_xml.split('\n')
             filtered_lines = []
             for line in lines:
@@ -148,22 +217,31 @@ class CiefpSatelliteXmlReader(Screen):
                 elif stripped.startswith('<?xml') or stripped.startswith('<!'):
                     filtered_lines.append(line)
             
-            # Dodajemo prilagođeno zaglavlje
             current_date = datetime.now().strftime("%d.%m.%Y")
             header = f"""<?xml version="1.0" encoding="iso-8859-1"?>
 <!--
 \tFile edited by ciefp satellite.xml editor, {current_date}
 -->
 """
-            # Kombinujemo zaglavlje i filtrirani XML
-            final_xml = header + '\n'.join(filtered_lines[1:])  # Preskačemo XML deklaraciju iz minidom-a
-
-            # Upisujemo u fajl
+            final_xml = header + '\n'.join(filtered_lines[1:])
+            
+            # Spremi na /etc/tuxbox/satellites.xml
             with open(SATELLITES_XML_PATH, 'w', encoding='iso-8859-1') as f:
                 f.write(final_xml)
+            print(f"[CiefpSatelliteXmlReader] Saved to {SATELLITES_XML_PATH}")
             
-            self.session.open(MessageBox, "Changes saved successfully!", MessageBox.TYPE_INFO)
+            # Spremi na /etc/enigma2/satellites.xml
+            try:
+                with open(SATELLITES_XML_PATH_ENIGMA2, 'w', encoding='iso-8859-1') as f:
+                    f.write(final_xml)
+                print(f"[CiefpSatelliteXmlReader] Saved to {SATELLITES_XML_PATH_ENIGMA2}")
+            except Exception as e:
+                print(f"[CiefpSatelliteXmlReader] Error saving to {SATELLITES_XML_PATH_ENIGMA2}: {str(e)}")
+                self.session.open(MessageBox, f"Error saving to {SATELLITES_XML_PATH_ENIGMA2}: {str(e)}", MessageBox.TYPE_ERROR)
+            
+            self.session.open(MessageBox, "Changes saved successfully to both locations!", MessageBox.TYPE_INFO)
         except Exception as e:
+            print(f"[CiefpSatelliteXmlReader] Error saving satellites.xml: {str(e)}")
             self.session.open(MessageBox, f"Error saving satellites.xml: {str(e)}", MessageBox.TYPE_ERROR)
 
     def editLine(self):
@@ -176,13 +254,11 @@ class CiefpSatelliteXmlReader(Screen):
         if cur and isinstance(cur[1], ET.Element) and cur[1].tag == "sat":
             self.session.open(CiefpSatelliteXmlEditor, cur[1], True)
 
-# Drugi ekran: Satellites.xml Editor
 class CiefpSatelliteXmlEditor(ConfigListScreen, Screen):
     skin = """
     <screen name="CiefpSatelliteXmlEditor" position="center,center" size="1600,800" title="..:: Ciefp Satellites.xml Editor ::..">
         <widget name="config" position="0,0" size="1000,720" scrollbarMode="showOnDemand" itemHeight="36" font="Regular;26" />
         <widget name="background" pixmap="/usr/lib/enigma2/python/Plugins/Extensions/CiefpSatelliteXmlEditor/background2.png" position="1000,0" size="600,800" zPosition="-1" />
-        <!-- Dugmići -->
         <ePixmap pixmap="/usr/share/enigma2/skin_default/buttons/green.png" position="350,750" size="40,40" alphatest="blend" />
         <ePixmap pixmap="/usr/share/enigma2/skin_default/buttons/yellow.png" position="650,750" size="40,40" alphatest="blend" />
         <widget name="key_green" position="400,750" size="200,40" font="Regular;24" halign="left" valign="center" transparent="1" />
@@ -254,39 +330,62 @@ class CiefpSatelliteXmlEditor(ConfigListScreen, Screen):
 
     def save(self):
         if self.is_new:
-            new_trans = ET.SubElement(self.element, "transponder")
+            new_trans = ET.Element("transponder")
+            new_trans.set("frequency", str(self.frequency.value * 1000))
+            new_trans.set("symbol_rate", str(self.symbol_rate.value * 1000))
+            new_trans.set("polarization", self.polarization.value)
+            new_trans.set("fec_inner", self.fec_inner.value)
+            new_trans.set("system", self.system.value)
+            new_trans.set("modulation", self.modulation.value)
+            
+            if self.is_id.value > 0:
+                new_trans.set("is_id", str(self.is_id.value))
+                new_trans.set("pls_code", str(self.pls_code.value))
+                new_trans.set("pls_mode", self.pls_mode.value)
+            
+            if self.t2mi_plp_id.value >= 0:
+                new_trans.set("t2mi_plp_id", str(self.t2mi_plp_id.value))
+                new_trans.set("t2mi_pid", str(self.t2mi_pid.value))
+            
+            # Pronađi ispravnu poziciju za umetanje prema frekvenciji
+            transponders = self.element.findall("transponder")
+            insert_index = 0
+            new_freq = int(new_trans.get("frequency"))
+            for i, trans in enumerate(transponders):
+                trans_freq = int(trans.get("frequency", "0"))
+                if new_freq < trans_freq:
+                    break
+                insert_index = i + 1
+            
+            self.element.insert(insert_index, new_trans)
             self.element = new_trans
-        self.element.set("frequency", str(self.frequency.value * 1000))
-        self.element.set("symbol_rate", str(self.symbol_rate.value * 1000))
-        self.element.set("polarization", self.polarization.value)
-        self.element.set("fec_inner", self.fec_inner.value)
-        self.element.set("system", self.system.value)
-        self.element.set("modulation", self.modulation.value)
-        
-        # Upisujemo multistream parametre samo ako je is_id > 0
-        if self.is_id.value > 0:
-            self.element.set("is_id", str(self.is_id.value))
-            self.element.set("pls_code", str(self.pls_code.value))
-            self.element.set("pls_mode", self.pls_mode.value)
         else:
-            # Uklanjamo ako postoje
-            for attr in ["is_id", "pls_code", "pls_mode"]:
-                if attr in self.element.attrib:
-                    del self.element.attrib[attr]
-        
-        # Upisujemo T2-MI parametre samo ako je t2mi_plp_id >= 0
-        if self.t2mi_plp_id.value >= 0:
-            self.element.set("t2mi_plp_id", str(self.t2mi_plp_id.value))
-            self.element.set("t2mi_pid", str(self.t2mi_pid.value))
-        else:
-            # Uklanjamo ako postoje
-            for attr in ["t2mi_plp_id", "t2mi_pid"]:
-                if attr in self.element.attrib:
-                    del self.element.attrib[attr]
+            self.element.set("frequency", str(self.frequency.value * 1000))
+            self.element.set("symbol_rate", str(self.symbol_rate.value * 1000))
+            self.element.set("polarization", self.polarization.value)
+            self.element.set("fec_inner", self.fec_inner.value)
+            self.element.set("system", self.system.value)
+            self.element.set("modulation", self.modulation.value)
+            
+            if self.is_id.value > 0:
+                self.element.set("is_id", str(self.is_id.value))
+                self.element.set("pls_code", str(self.pls_code.value))
+                self.element.set("pls_mode", self.pls_mode.value)
+            else:
+                for attr in ["is_id", "pls_code", "pls_mode"]:
+                    if attr in self.element.attrib:
+                        del self.element.attrib[attr]
+            
+            if self.t2mi_plp_id.value >= 0:
+                self.element.set("t2mi_plp_id", str(self.t2mi_plp_id.value))
+                self.element.set("t2mi_pid", str(self.t2mi_pid.value))
+            else:
+                for attr in ["t2mi_plp_id", "t2mi_pid"]:
+                    if attr in self.element.attrib:
+                        del self.element.attrib[attr]
         
         self.close()
 
-# Plugin descriptor
 def main(session, **kwargs):
     session.open(CiefpSatelliteXmlReader)
 
