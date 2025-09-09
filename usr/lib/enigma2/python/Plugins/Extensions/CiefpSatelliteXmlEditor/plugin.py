@@ -13,7 +13,7 @@ import xml.dom.minidom as minidom
 import os
 from datetime import datetime
 
-PLUGIN_VERSION = "1.1"
+PLUGIN_VERSION = "1.2"
 PLUGIN_ICON = "icon.png"
 PLUGIN_NAME = "CiefpSatellitesXmlEditor"
 PLUGIN_DESCRIPTION = "Edit satellites.xml file"
@@ -77,7 +77,10 @@ class CiefpSatelliteXmlReader(Screen):
 
     def convertOrbitalPos(self, pos):
         pos = int(pos)
-        return pos // 10 if pos > 999 else pos
+        if pos > 1800:
+            return pos - 3600
+        else:
+            return pos
 
     def getCurrentTransponderData(self):
         service = self.session.nav.getCurrentService()
