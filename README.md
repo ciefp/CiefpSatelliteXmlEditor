@@ -30,12 +30,8 @@
 
 ## Screenshots
 
-<div align="center">
-  <img src="https://github.com/ciefp/CiefpSatelliteXmlEditor/blob/main/screenshot1.jpg
-  <img src="https://github.com/ciefp/CiefpSatelliteXmlEditor/blob/main/screenshot2.jpg">
-</div>
-
-> *Add real screenshots to `/docs/screenshots/`!*
+| ![Main](https://github.com/ciefp/CiefpSatelliteXmlEditor/blob/main/screenshot1.jpg) |
+| ![Editor](https://github.com/ciefp/CiefpSatelliteXmlEditor/blob/main/screenshot2.jpg) |
 
 ---
 
