@@ -175,14 +175,3 @@ Love the plugin? Star it on GitHub!
 > **Warning**: Always backup `satellites.xml` before editing. Incorrect values may break rotor control.
 
 ---
-
-### Next Steps (Optional)
-
-Add these files to your repo:
-- `LICENSE` (MIT)
-- `docs/screenshots/main.png`, `editor.png`
-- `icon.png`, `background.png`, `background2.png`
-- `CHANGELOG.md`
-
-**Want me to generate any of these?** Just ask!
-```
